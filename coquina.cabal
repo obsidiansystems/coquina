@@ -1,0 +1,30 @@
+cabal-version:       >=1.10
+name:                coquina
+version:             0.1.0.0
+synopsis:            Yet another shell monad.
+description:         A simple monad for shelling out from Haskell programs.
+bug-reports:         https://gitlab.com/obsidian.systems/coquina/issues
+license:             BSD3
+license-file:        LICENSE
+author:              Obsidian Systems LLC
+maintainer:          maintainer@obsidian.systems
+copyright:           2019 Obsidian Systems LLC
+category:            shell
+build-type:          Simple
+extra-source-files:  CHANGELOG.md
+                     LICENSE
+
+library
+  hs-source-dirs: src
+  build-depends: base
+               , containers
+               , deepseq
+               , directory
+               , filepath
+               , mtl
+               , process
+               , temporary
+               , text
+  exposed-modules: Coquina
+  ghc-options: -Wall
+  default-language: Haskell2010
