@@ -8,17 +8,25 @@
 module Coquina where
 
 import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
+import Control.Concurrent.STM
 import Control.DeepSeq (rnf)
 import Control.Exception (SomeException, evaluate, mask, try, throwIO, onException)
-import Control.Monad.Except
+import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Writer
-import Data.List
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BS
+import qualified Data.ByteString.Lazy as LBS
+import Data.IORef (newIORef, atomicModifyIORef', readIORef)
+import Data.List (intersperse)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import System.Environment
-import System.Exit
-import System.IO
-import System.IO.Temp
+import qualified Data.Text as T (unpack)
+import qualified Data.Text.Encoding as T (decodeUtf8)
+import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose, hGetContents)
+import System.Environment (getEnvironment)
+import System.Exit (ExitCode(..))
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process
 
 -- | A class that supports reading and writing stdout and stderr
@@ -99,6 +107,67 @@ shellCreateProcess = shellCreateProcessWithEnv mempty
 -- | Run a 'CreateProcess' in a 'Shell'
 run :: MonadIO m => CreateProcess -> Shell m ()
 run = shellCreateProcess
+
+-- | Represents a process that is running and whose incremental output can
+-- be retrieved before it completes. The '_streamingProcess_waitForProcess'
+-- finalizer can be called to get the exit status of the process and to get
+-- the final output.
+data StreamingProcess m = StreamingProcess
+  { _streamingProcess_stdout :: IO ByteString
+  , _streamingProcess_stderr :: IO ByteString
+  , _streamingProcess_waitForProcess :: Shell m ExitCode
+  , _streamingProcess_processHandle :: ProcessHandle
+  }
+
+-- | A process whose output can be inspected while it is still running.
+shellStreamableProcess
+  :: MonadIO m
+  => CreateProcess
+  -> Shell m (StreamingProcess m)
+shellStreamableProcess p = do
+  (_, mout, merr, ph) <- liftIO $ createProcess $ p
+    { std_out = CreatePipe
+    , std_err = CreatePipe
+    }
+  stdout <- liftIO newTChanIO
+  stderr <- liftIO newTChanIO
+  stdoutAcc <- liftIO $ newIORef mempty
+  stderrAcc <- liftIO $ newIORef mempty
+  case (mout, merr) of
+    (Just hout, Just herr) -> do
+    -- TODO: This code is basically the same as that in Reflex.Process.createProcess, except for the action to take when new output is received
+      let handleReader h c r = do
+            hSetBuffering h LineBuffering
+            let go = do
+                  open <- hIsOpen h
+                  when open $ do
+                    readable <- hIsReadable h
+                    when readable $ do
+                      out <- BS.hGetSome h 32768
+                      if BS.null out
+                        then return ()
+                        else do
+                          atomically $ writeTChan c out
+                          atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
+                          go
+            go
+      _ <- liftIO $ forkIO $ handleReader hout stdout stdoutAcc
+      _ <- liftIO $ forkIO $ handleReader herr stderr stderrAcc
+      let finalize = do
+            exitCode <- liftIO $ waitForProcess ph
+            stdoutFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stdoutAcc
+            stderrFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stderrAcc
+            tellOutput (unpack stdoutFinal, unpack stderrFinal)
+            return exitCode
+      return $ StreamingProcess
+        { _streamingProcess_stdout = atomically (readTChan stdout)
+        , _streamingProcess_stderr = atomically (readTChan stderr)
+        , _streamingProcess_waitForProcess = finalize
+        , _streamingProcess_processHandle = ph
+        }
+    _ -> error "shellStreamingProcess: Created pipes were not returned"
+    where
+      unpack = T.unpack . T.decodeUtf8
 
 -- | Run a shell process using the given runner function
 shellCreateProcess'

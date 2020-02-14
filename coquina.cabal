@@ -17,12 +17,14 @@ extra-source-files:  CHANGELOG.md
 library
   hs-source-dirs: src
   build-depends: base
+               , bytestring
                , containers
                , deepseq
                , directory
                , filepath
                , mtl
                , process
+               , stm
                , temporary
                , text
   exposed-modules: Coquina
