@@ -140,21 +140,20 @@ shellStreamableProcess p = do
     -- TODO: This code is basically the same as that in Reflex.Process.createProcess, except for the action to take when new output is received
       let handleReader h c r = do
             hSetBuffering h LineBuffering
-            let go = do
-                  open <- hIsOpen h
-                  when open $ do
-                    readable <- hIsReadable h
-                    when readable $ do
-                      out <- BS.hGetSome h 32768
-                      if BS.null out
-                        then return ()
-                        else do
-                          atomically $ writeTChan c out
-                          atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
-                          go
-            go
-      _ <- liftIO $ forkIO $ handleReader hout stdout stdoutAcc
-      _ <- liftIO $ forkIO $ handleReader herr stderr stderrAcc
+            fix $ \go -> do
+              open <- hIsOpen h
+              when open $ do
+                readable <- hIsReadable h
+                when readable $ do
+                  out <- BS.hGetSome h (2^(15 :: Int))
+                  if BS.null out
+                    then return ()
+                    else do
+                      atomically $ writeTChan c out
+                      atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
+                      go
+      _ <- liftIO $ forkIO $ handleReader hout stdout stdoutAcc -- TODO: Proper thread resource handling
+      _ <- liftIO $ forkIO $ handleReader herr stderr stderrAcc -- TODO: Proper thread resource handling
       let finalize = do
             exitCode <- liftIO $ waitForProcess ph
             stdoutFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stdoutAcc
