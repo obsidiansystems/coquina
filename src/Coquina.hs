@@ -174,7 +174,7 @@ shellStreamableProcess p = do
       unpack = T.unpack . T.decodeUtf8
       drainTChan chan = flip fix mempty $ \loop acc -> atomically (tryReadTChan chan) >>= \case
         Nothing -> pure acc
-        Just x -> loop $ acc <> BS.byteString x
+        Just x -> loop $! acc <> BS.byteString x
 
 -- | Run a shell process using the given runner function
 shellCreateProcess'
