@@ -19,12 +19,10 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Foldable (fold)
 import Data.IORef (newIORef, atomicModifyIORef', readIORef)
 import Data.List (intersperse)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Sequence as Seq
 import qualified Data.Text as T (unpack)
 import qualified Data.Text.Encoding as T (decodeUtf8)
 import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose, hGetContents)
@@ -117,8 +115,8 @@ run = shellCreateProcess
 -- finalizer can be called to get the exit status of the process and to get
 -- the final output.
 data StreamingProcess m = StreamingProcess
-  { _streamingProcess_stdout :: STM ByteString
-  , _streamingProcess_stderr :: STM ByteString
+  { _streamingProcess_stdout :: IO ByteString
+  , _streamingProcess_stderr :: IO ByteString
   , _streamingProcess_waitForProcess :: Shell m ExitCode
   , _streamingProcess_processHandle :: ProcessHandle
   }
@@ -160,22 +158,23 @@ shellStreamableProcess p = do
             exitCode <- liftIO $ waitForProcess ph
               `finally` Async.uninterruptibleCancel outThread
               `finally` Async.uninterruptibleCancel errThread
-            stdoutFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stdoutAcc
-            stderrFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stderrAcc
+            stdoutFinal <- liftIO $ builderToStrictBS <$> readIORef stdoutAcc
+            stderrFinal <- liftIO $ builderToStrictBS <$> readIORef stderrAcc
             tellOutput (unpack stdoutFinal, unpack stderrFinal)
             return exitCode
       return $ StreamingProcess
-        { _streamingProcess_stdout = fold <$> drainTChan stdout
-        , _streamingProcess_stderr = fold <$> drainTChan stderr
+        { _streamingProcess_stdout = builderToStrictBS <$> drainTChan stdout
+        , _streamingProcess_stderr = builderToStrictBS <$> drainTChan stderr
         , _streamingProcess_waitForProcess = finalize
         , _streamingProcess_processHandle = ph
         }
     _ -> error "shellStreamingProcess: Created pipes were not returned"
     where
+      builderToStrictBS = LBS.toStrict . BS.toLazyByteString
       unpack = T.unpack . T.decodeUtf8
-      drainTChan chan = flip fix mempty $ \loop acc -> tryReadTChan chan >>= \case
+      drainTChan chan = flip fix mempty $ \loop acc -> atomically (tryReadTChan chan) >>= \case
         Nothing -> pure acc
-        Just x -> loop $ acc Seq.:|> x
+        Just x -> loop $ acc <> BS.byteString x
 
 -- | Run a shell process using the given runner function
 shellCreateProcess'
