@@ -115,8 +115,8 @@ run = shellCreateProcess
 -- finalizer can be called to get the exit status of the process and to get
 -- the final output.
 data StreamingProcess m = StreamingProcess
-  { _streamingProcess_stdout :: IO ByteString
-  , _streamingProcess_stderr :: IO ByteString
+  { _streamingProcess_stdout :: STM ByteString
+  , _streamingProcess_stderr :: STM ByteString
   , _streamingProcess_waitForProcess :: Shell m ExitCode
   , _streamingProcess_processHandle :: ProcessHandle
   }
@@ -161,8 +161,8 @@ shellStreamableProcess p = do
             tellOutput (unpack stdoutFinal, unpack stderrFinal)
             return exitCode
       return $ StreamingProcess
-        { _streamingProcess_stdout = atomically (fold <$> drainTChan stdout)
-        , _streamingProcess_stderr = atomically (fold <$> drainTChan stderr)
+        { _streamingProcess_stdout = fold <$> drainTChan stdout
+        , _streamingProcess_stderr = fold <$> drainTChan stderr
         , _streamingProcess_waitForProcess = finalize
         , _streamingProcess_processHandle = ph
         }
