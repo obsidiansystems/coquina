@@ -21,6 +21,7 @@ library
                , containers
                , deepseq
                , directory
+               , exceptions
                , filepath
                , mtl
                , process
