@@ -8,10 +8,11 @@
 module Coquina where
 
 import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
+import qualified Control.Concurrent.Async as Async
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 import Control.Concurrent.STM
 import Control.DeepSeq (rnf)
-import Control.Exception (SomeException, evaluate, mask, try, throwIO, onException)
+import Control.Exception (SomeException, evaluate, finally, mask, try, throwIO, onException)
 import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
@@ -153,10 +154,12 @@ shellStreamableProcess p = do
                       atomically $ writeTChan c out
                       atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
                       go
-      _ <- liftIO $ forkIO $ handleReader hout stdout stdoutAcc -- TODO: Proper thread resource handling
-      _ <- liftIO $ forkIO $ handleReader herr stderr stderrAcc -- TODO: Proper thread resource handling
+      outThread <- liftIO $ Async.async $ handleReader hout stdout stdoutAcc
+      errThread <- liftIO $ Async.async $ handleReader herr stderr stderrAcc
       let finalize = do
             exitCode <- liftIO $ waitForProcess ph
+              `finally` Async.uninterruptibleCancel outThread
+              `finally` Async.uninterruptibleCancel errThread
             stdoutFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stdoutAcc
             stderrFinal <- liftIO $ LBS.toStrict . BS.toLazyByteString <$> readIORef stderrAcc
             tellOutput (unpack stdoutFinal, unpack stderrFinal)
