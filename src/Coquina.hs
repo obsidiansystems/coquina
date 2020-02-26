@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -9,10 +10,9 @@ module Coquina where
 
 import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
 import qualified Control.Concurrent.Async as Async
-import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
-import Control.Concurrent.STM
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.DeepSeq (rnf)
-import Control.Exception (SomeException, evaluate, finally, mask, try, throwIO, onException)
+import Control.Exception (SomeException, evaluate, mask, try, throwIO, onException)
 import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
@@ -25,6 +25,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Text as T (unpack)
 import qualified Data.Text.Encoding as T (decodeUtf8)
+import GHC.Generics (Generic)
 import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose, hGetContents)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
@@ -115,66 +116,81 @@ run = shellCreateProcess
 -- finalizer can be called to get the exit status of the process and to get
 -- the final output.
 data StreamingProcess m = StreamingProcess
-  { _streamingProcess_stdout :: IO ByteString
-  , _streamingProcess_stderr :: IO ByteString
-  , _streamingProcess_waitForProcess :: Shell m ExitCode
-  , _streamingProcess_processHandle :: ProcessHandle
-  }
+  { _streamingProcess_waitForProcess :: !(Shell m ExitCode)
+  , _streamingProcess_terminateProcess :: !(Shell m ())
+  , _streamingProcess_getProcessExitCode :: !(Shell m (Maybe ExitCode))
+  } deriving Generic
 
 -- | A process whose output can be inspected while it is still running.
 shellStreamableProcess
-  :: MonadIO m
-  => CreateProcess
+  :: (MonadIO m, MonadMask m)
+  => (ByteString -> IO ()) -- ^ Handle stdout
+  -> (ByteString -> IO ()) -- ^ Handle stderr
+  -> CreateProcess
   -> Shell m (StreamingProcess m)
-shellStreamableProcess p = do
+shellStreamableProcess handleStdout handleStderr p = do
   (_, mout, merr, ph) <- liftIO $ createProcess $ p
     { std_out = CreatePipe
     , std_err = CreatePipe
     }
-  stdout <- liftIO newTChanIO
-  stderr <- liftIO newTChanIO
-  stdoutAcc <- liftIO $ newIORef mempty
-  stderrAcc <- liftIO $ newIORef mempty
   case (mout, merr) of
     (Just hout, Just herr) -> do
     -- TODO: This code is basically the same as that in Reflex.Process.createProcess, except for the action to take when new output is received
-      let handleReader h c r = do
-            hSetBuffering h LineBuffering
-            fix $ \go -> do
-              open <- hIsOpen h
-              when open $ do
-                readable <- hIsReadable h
-                when readable $ do
-                  out <- BS.hGetSome h (2^(15 :: Int))
-                  if BS.null out
-                    then return ()
-                    else do
-                      atomically $ writeTChan c out
-                      atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
-                      go
-      outThread <- liftIO $ Async.async $ handleReader hout stdout stdoutAcc
-      errThread <- liftIO $ Async.async $ handleReader herr stderr stderrAcc
-      let finalize = do
-            exitCode <- liftIO $ waitForProcess ph
-              `finally` Async.uninterruptibleCancel outThread
-              `finally` Async.uninterruptibleCancel errThread
-            stdoutFinal <- liftIO $ builderToStrictBS <$> readIORef stdoutAcc
-            stderrFinal <- liftIO $ builderToStrictBS <$> readIORef stderrAcc
-            tellOutput (unpack stdoutFinal, unpack stderrFinal)
-            return exitCode
+      let
+        handleReader h (handler :: ByteString -> IO ()) = do
+          hSetBuffering h LineBuffering
+          fix $ \go -> do
+            open <- hIsOpen h
+            when open $ do
+              readable <- hIsReadable h
+              when readable $ do
+                out <- BS.hGetSome h (2^(15 :: Int))
+                unless (BS.null out) $ do
+                  handler out
+                  go
+
+        appendIORef r out = atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
+
+      stdoutAcc <- liftIO $ newIORef mempty
+      stderrAcc <- liftIO $ newIORef mempty
+      outThread <- liftIO $ Async.async $ handleReader hout $ \out ->
+        appendIORef stdoutAcc out *> handleStdout out
+      errThread <- liftIO $ Async.async $ handleReader herr $ \out ->
+        appendIORef stderrAcc out *> handleStderr out
+      let finalize f =
+            liftIO f
+              `finally` liftIO (Async.uninterruptibleCancel outThread)
+              `finally` liftIO (Async.uninterruptibleCancel errThread)
+              `finally` do
+                stdoutFinal <- liftIO $ builderToStrictBS <$> readIORef stdoutAcc
+                stderrFinal <- liftIO $ builderToStrictBS <$> readIORef stderrAcc
+                tellOutput (unpack stdoutFinal, unpack stderrFinal)
       return $ StreamingProcess
-        { _streamingProcess_stdout = builderToStrictBS <$> drainTChan stdout
-        , _streamingProcess_stderr = builderToStrictBS <$> drainTChan stderr
-        , _streamingProcess_waitForProcess = finalize
-        , _streamingProcess_processHandle = ph
+        { _streamingProcess_waitForProcess = finalize $ waitForProcess ph
+        , _streamingProcess_terminateProcess = finalize $ terminateProcess ph
+        , _streamingProcess_getProcessExitCode = finalize $ getProcessExitCode ph
         }
     _ -> error "shellStreamingProcess: Created pipes were not returned"
     where
       builderToStrictBS = LBS.toStrict . BS.toLazyByteString
       unpack = T.unpack . T.decodeUtf8
-      drainTChan chan = flip fix mempty $ \loop acc -> atomically (tryReadTChan chan) >>= \case
-        Nothing -> pure acc
-        Just x -> loop $! acc <> BS.byteString x
+
+-- | Like 'shellStreamableProcess' but instead of taking handlers for each
+-- stream, it automatically buffers the output of each stream and returns
+-- 'IO' actions to read and clear the buffer.
+shellStreamableProcessBuffered
+  :: (MonadIO m, MonadMask m)
+  => CreateProcess
+  -> Shell m (StreamingProcess m, IO ByteString, IO ByteString) -- ^ ('StreamProcess', stdout, stderr)
+shellStreamableProcessBuffered p = do
+  stdoutBuf <- liftIO $ newIORef mempty
+  stderrBuf <- liftIO $ newIORef mempty
+  sp <- shellStreamableProcess (updateBuf stdoutBuf) (updateBuf stderrBuf) p
+  pure (sp, eatBuf stdoutBuf, eatBuf stderrBuf)
+  where
+    updateBuf buf new = atomicModifyIORef' buf $ \old -> (old <> BS.byteString new, ())
+    eatBuf buf = atomicModifyIORef' buf $ \out -> (mempty, LBS.toStrict $ BS.toLazyByteString out)
+
 
 -- | Run a shell process using the given runner function
 shellCreateProcess'

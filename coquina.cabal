@@ -8,7 +8,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Obsidian Systems LLC
 maintainer:          maintainer@obsidian.systems
-copyright:           2019 Obsidian Systems LLC
+copyright:           2020 Obsidian Systems LLC
 category:            shell
 build-type:          Simple
 extra-source-files:  CHANGELOG.md
@@ -40,3 +40,21 @@ executable readme
                , process
   ghc-options: -pgmL markdown-unlit
   build-tool-depends: markdown-unlit:markdown-unlit
+
+test-suite unit-tests
+  type: exitcode-stdio-1.0
+  main-is: unit-tests.hs
+  hs-source-dirs: test
+  ghc-options: -O2 -Wall -rtsopts
+  build-depends: base
+               , async
+               , coquina
+               , exceptions
+               , hspec
+               , lens
+               , mtl
+               , process
+               , stm
+               , temporary
+               , text
+               , which
