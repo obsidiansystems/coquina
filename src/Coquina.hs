@@ -79,7 +79,7 @@ instance MonadWriter w m => MonadWriter w (Shell m) where
       Left ec -> throwError ec
       Right v -> return (v, w)
   pass a = do
-    (out, err, e) <- lift $ pass $ do
+    (out, err, e) <- lift $ pass $
       runShell a >>= \case
         (out, err, Left ec) -> return ((out, err, Left ec), id)
         (out, err, Right (x, f)) -> return ((out, err, Right x), f)
@@ -187,7 +187,7 @@ shellCreateProcess' f p = do
   tellOutput (out, err)
   case ex of
     ExitFailure c -> do
-      liftIO $ putStrLn $ mconcat $
+      liftIO $ putStrLn $ mconcat
         [ "Command failed: "
         , showCommand p
         , "\n"
