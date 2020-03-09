@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -8,17 +9,27 @@
 module Coquina where
 
 import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
+import qualified Control.Concurrent.Async as Async
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.DeepSeq (rnf)
 import Control.Exception (SomeException, evaluate, mask, try, throwIO, onException)
-import Control.Monad.Except
+import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Writer
-import Data.List
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BS
+import qualified Data.ByteString.Lazy as LBS
+import Data.IORef (newIORef, atomicModifyIORef', readIORef)
+import Data.List (intersperse)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import System.Environment
-import System.Exit
-import System.IO
-import System.IO.Temp
+import qualified Data.Text as T (unpack)
+import qualified Data.Text.Encoding as T (decodeUtf8)
+import GHC.Generics (Generic)
+import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose, hGetContents)
+import System.Environment (getEnvironment)
+import System.Exit (ExitCode(..))
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process
 
 -- | A class that supports reading and writing stdout and stderr
@@ -48,7 +59,7 @@ readStderr f = do
 
 -- | An action that supports running commands, reading their output, and emmitting output
 newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (String, String) m) a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask)
 
 instance MonadTrans Shell where
   lift = Shell . lift . lift
@@ -69,7 +80,7 @@ instance MonadWriter w m => MonadWriter w (Shell m) where
       Left ec -> throwError ec
       Right v -> return (v, w)
   pass a = do
-    (out, err, e) <- lift $ pass $ do
+    (out, err, e) <- lift $ pass $
       runShell a >>= \case
         (out, err, Left ec) -> return ((out, err, Left ec), id)
         (out, err, Right (x, f)) -> return ((out, err, Right x), f)
@@ -100,6 +111,87 @@ shellCreateProcess = shellCreateProcessWithEnv mempty
 run :: MonadIO m => CreateProcess -> Shell m ()
 run = shellCreateProcess
 
+-- | Represents a process that is running and whose incremental output can
+-- be retrieved before it completes. The '_streamingProcess_waitForProcess'
+-- finalizer can be called to get the exit status of the process and to get
+-- the final output.
+data StreamingProcess m = StreamingProcess
+  { _streamingProcess_waitForProcess :: !(Shell m ExitCode)
+  , _streamingProcess_terminateProcess :: !(Shell m ())
+  , _streamingProcess_getProcessExitCode :: !(Shell m (Maybe ExitCode))
+  } deriving Generic
+
+-- | A process whose output can be inspected while it is still running.
+shellStreamableProcess
+  :: (MonadIO m, MonadMask m)
+  => (ByteString -> IO ()) -- ^ Handle stdout
+  -> (ByteString -> IO ()) -- ^ Handle stderr
+  -> CreateProcess
+  -> Shell m (StreamingProcess m)
+shellStreamableProcess handleStdout handleStderr p = do
+  (_, mout, merr, ph) <- liftIO $ createProcess $ p
+    { std_out = CreatePipe
+    , std_err = CreatePipe
+    }
+  case (mout, merr) of
+    (Just hout, Just herr) -> do
+    -- TODO: This code is basically the same as that in Reflex.Process.createProcess, except for the action to take when new output is received
+      let
+        handleReader h (handler :: ByteString -> IO ()) = do
+          hSetBuffering h LineBuffering
+          fix $ \go -> do
+            open <- hIsOpen h
+            when open $ do
+              readable <- hIsReadable h
+              when readable $ do
+                out <- BS.hGetSome h (2^(15 :: Int))
+                unless (BS.null out) $ do
+                  handler out
+                  go
+
+        appendIORef r out = atomicModifyIORef' r (\v -> (v <> BS.byteString out, ()))
+
+      stdoutAcc <- liftIO $ newIORef mempty
+      stderrAcc <- liftIO $ newIORef mempty
+      outThread <- liftIO $ Async.async $ handleReader hout $ \out ->
+        appendIORef stdoutAcc out *> handleStdout out
+      errThread <- liftIO $ Async.async $ handleReader herr $ \out ->
+        appendIORef stderrAcc out *> handleStderr out
+      let finalize f =
+            liftIO f
+              `finally` liftIO (Async.uninterruptibleCancel outThread)
+              `finally` liftIO (Async.uninterruptibleCancel errThread)
+              `finally` do
+                stdoutFinal <- liftIO $ builderToStrictBS <$> readIORef stdoutAcc
+                stderrFinal <- liftIO $ builderToStrictBS <$> readIORef stderrAcc
+                tellOutput (unpack stdoutFinal, unpack stderrFinal)
+      return $ StreamingProcess
+        { _streamingProcess_waitForProcess = finalize $ waitForProcess ph
+        , _streamingProcess_terminateProcess = finalize $ terminateProcess ph
+        , _streamingProcess_getProcessExitCode = finalize $ getProcessExitCode ph
+        }
+    _ -> error "shellStreamingProcess: Created pipes were not returned"
+    where
+      builderToStrictBS = LBS.toStrict . BS.toLazyByteString
+      unpack = T.unpack . T.decodeUtf8
+
+-- | Like 'shellStreamableProcess' but instead of taking handlers for each
+-- stream, it automatically buffers the output of each stream and returns
+-- 'IO' actions to read and clear the buffer.
+shellStreamableProcessBuffered
+  :: (MonadIO m, MonadMask m)
+  => CreateProcess
+  -> Shell m (StreamingProcess m, IO ByteString, IO ByteString) -- ^ ('StreamProcess', stdout, stderr)
+shellStreamableProcessBuffered p = do
+  stdoutBuf <- liftIO $ newIORef mempty
+  stderrBuf <- liftIO $ newIORef mempty
+  sp <- shellStreamableProcess (updateBuf stdoutBuf) (updateBuf stderrBuf) p
+  pure (sp, eatBuf stdoutBuf, eatBuf stderrBuf)
+  where
+    updateBuf buf new = atomicModifyIORef' buf $ \old -> (old <> BS.byteString new, ())
+    eatBuf buf = atomicModifyIORef' buf $ \out -> (mempty, LBS.toStrict $ BS.toLazyByteString out)
+
+
 -- | Run a shell process using the given runner function
 shellCreateProcess'
   :: MonadIO m
@@ -111,7 +203,7 @@ shellCreateProcess' f p = do
   tellOutput (out, err)
   case ex of
     ExitFailure c -> do
-      liftIO $ putStrLn $ mconcat $
+      liftIO $ putStrLn $ mconcat
         [ "Command failed: "
         , showCommand p
         , "\n"
