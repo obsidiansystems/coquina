@@ -37,6 +37,7 @@ executable readme
   main-is: README.lhs
   build-depends: base
                , coquina
+               , text
                , process
   ghc-options: -pgmL markdown-unlit
   build-tool-depends: markdown-unlit:markdown-unlit
