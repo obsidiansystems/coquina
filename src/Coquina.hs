@@ -9,7 +9,7 @@
 
 module Coquina where
 
-import Coquina.Internal (withForkWait)
+import Coquina.Internal (withForkWait, readAndDecodeCreateProcess)
 
 import qualified Control.Concurrent.Async as Async
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
@@ -227,20 +227,7 @@ shellCreateProcessWithEnv envOverrides = shellCreateProcess' f
       envWithOverrides <- liftIO $ if Map.null envOverrides
         then return $ env cmd
         else Just . Map.toList . Map.union envOverrides . Map.fromList <$> getEnvironment
-      withCreateProcess (cmd { env = envWithOverrides, std_out = CreatePipe, std_err = CreatePipe }) $ \_ mouth merrh ph -> case (mouth, merrh) of
-        (Just outh, Just errh) -> do
-          out <- fmap T.decodeUtf8 $ BS.hGetContents outh
-          err <- fmap T.decodeUtf8 $ BS.hGetContents errh
-          withForkWait (evaluate $ rnf out) $ \waitOut ->
-            withForkWait (evaluate $ rnf err) $ \waitErr -> do
-              waitOut
-              waitErr
-              hClose outh
-              hClose errh
-          exitCode <- waitForProcess ph
-          return (exitCode, out, err)
-        (Nothing, _) -> error "shellCreateProcessWithEnv: Failed to get std_out handle"
-        (Just _, Nothing) -> error "shellCreateProcessWithEnv: Failed to get std_err handle"
+      readAndDecodeCreateProcess $ cmd { env = envWithOverrides }
 
 runCreateProcessWithEnv :: Map String String -> CreateProcess -> IO (ExitCode, Text, Text)
 runCreateProcessWithEnv menv p = execShell $ shellCreateProcessWithEnv menv p
