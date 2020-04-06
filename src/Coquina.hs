@@ -18,6 +18,7 @@ module Coquina (
   execShell,
   shellCreateProcess,
   run,
+  StreamingProcess(..),
   shellStreamableProcess,
   shellStreamableProcessBuffered,
   shellCreateProcess',
