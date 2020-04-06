@@ -7,35 +7,14 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Coquina (
-  MonadShell(..),
-  tellStdout,
-  tellStderr,
-  readStdout,
-  readStderr,
-  Shell(..),
-  runShell,
-  execShell,
-  shellCreateProcess,
-  run,
-  StreamingProcess(..),
-  shellStreamableProcess,
-  shellStreamableProcessBuffered,
-  shellCreateProcess',
-  shellCreateProcessWithEnv,
-  runCreateProcessWithEnv,
-  runCreateProcess,
-  shellCreateProcessWithStdOut,
-  inTempDirectory,
-  logCommand,
-  showCommand
-) where
+module Coquina where
 
-import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
+import Coquina.Internal (withForkWait)
+
 import qualified Control.Concurrent.Async as Async
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.DeepSeq (rnf)
-import Control.Exception (SomeException, evaluate, mask, try, throwIO, onException)
+import Control.Exception (evaluate)
 import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
@@ -291,15 +270,6 @@ shellCreateProcessWithStdOut hndl cp = do
       c <- fmap T.decodeUtf8 $ BS.hGetContents h
       withForkWait (evaluate $ rnf c) $ \wait -> wait >> hClose h
       return c
-
--- The code below is taken from System.Process which unfortunately does not export this function
-withForkWait :: IO () -> (IO () ->  IO a) -> IO a
-withForkWait async body = do
-  waitVar <- newEmptyMVar :: IO (MVar (Either SomeException ()))
-  mask $ \restore -> do
-    tid <- forkIO $ try (restore async) >>= putMVar waitVar
-    let wait = takeMVar waitVar >>= either throwIO return
-    restore (body wait) `onException` killThread tid
 
 -- | Run a shell command with access to a temporary directory
 inTempDirectory

@@ -30,6 +30,7 @@ library
                , temporary
                , text
   exposed-modules: Coquina
+  other-modules: Coquina.Internal
   ghc-options: -Wall
   default-language: Haskell2010
 
