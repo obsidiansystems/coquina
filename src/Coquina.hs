@@ -5,8 +5,30 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-module Coquina where
+module Coquina (
+  MonadShell(..),
+  tellStdout,
+  tellStderr,
+  readStdout,
+  readStderr,
+  Shell(..),
+  runShell,
+  execShell,
+  shellCreateProcess,
+  run,
+  shellStreamableProcess,
+  shellStreamableProcessBuffered,
+  shellCreateProcess',
+  shellCreateProcessWithEnv,
+  runCreateProcessWithEnv,
+  runCreateProcess,
+  shellCreateProcessWithStdOut,
+  inTempDirectory,
+  logCommand,
+  showCommand
+) where
 
 import Control.Concurrent (MVar, newEmptyMVar, forkIO, putMVar, takeMVar, killThread)
 import qualified Control.Concurrent.Async as Async
@@ -20,13 +42,15 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.IORef (newIORef, atomicModifyIORef', readIORef)
-import Data.List (intersperse)
+import qualified Data.List as L
 import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Text as T (unpack)
+import Data.Text (Text)
+import qualified Data.Text as T (pack)
 import qualified Data.Text.Encoding as T (decodeUtf8)
+import qualified Data.Text.IO as T (putStrLn)
 import GHC.Generics (Generic)
-import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose, hGetContents)
+import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.IO.Temp (withSystemTempDirectory)
@@ -34,31 +58,31 @@ import System.Process
 
 -- | A class that supports reading and writing stdout and stderr
 class Monad m => MonadShell m where
-  tellOutput :: (String, String) -> m ()
-  readOutput :: m a -> m ((String, String), a)
+  tellOutput :: (Text, Text) -> m ()
+  readOutput :: m a -> m ((Text, Text), a)
 
 -- | Write to stdout
-tellStdout :: MonadShell m => String -> m ()
+tellStdout :: MonadShell m => Text -> m ()
 tellStdout s = tellOutput (s, mempty)
 
 -- | Write to stderr
-tellStderr :: MonadShell m => String -> m ()
+tellStderr :: MonadShell m => Text -> m ()
 tellStderr s = tellOutput (mempty, s)
 
 -- | Read the stdout of a command
-readStdout :: MonadShell m => m a -> m (String, a)
+readStdout :: MonadShell m => m a -> m (Text, a)
 readStdout f = do
   ((out, _), a) <- readOutput f
   return (out, a)
 
 -- | Read the stderr of a command
-readStderr :: MonadShell m => m a -> m (String, a)
+readStderr :: MonadShell m => m a -> m (Text, a)
 readStderr f = do
   ((_, err), a) <- readOutput f
   return (err, a)
 
 -- | An action that supports running commands, reading their output, and emmitting output
-newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (String, String) m) a }
+newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (Text, Text) m) a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask)
 
 instance MonadTrans Shell where
@@ -90,13 +114,13 @@ instance MonadWriter w m => MonadWriter w (Shell m) where
       Right v -> return v
 
 -- | Run a shell action, producing stdout, stderr, and a result.
-runShell :: Monad m => Shell m a -> m (String, String, Either Int a)
+runShell :: Monad m => Shell m a -> m (Text, Text, Either Int a)
 runShell (Shell s) = do
   (e, (out, err)) <- runWriterT $ runExceptT s
   return (out, err, e)
 
 -- | Run a shell action, producing an exit code, stdout, and stderr
-execShell :: Monad m => Shell m a -> m (ExitCode, String, String)
+execShell :: Monad m => Shell m a -> m (ExitCode, Text, Text)
 execShell s = do
   (out, err, r) <- runShell s
   case r of
@@ -164,7 +188,7 @@ shellStreamableProcess handleStdout handleStderr p = do
               `finally` do
                 stdoutFinal <- liftIO $ builderToStrictBS <$> readIORef stdoutAcc
                 stderrFinal <- liftIO $ builderToStrictBS <$> readIORef stderrAcc
-                tellOutput (unpack stdoutFinal, unpack stderrFinal)
+                tellOutput (T.decodeUtf8 stdoutFinal, T.decodeUtf8 stderrFinal)
       return $ StreamingProcess
         { _streamingProcess_waitForProcess = finalize $ waitForProcess ph
         , _streamingProcess_terminateProcess = finalize $ terminateProcess ph
@@ -173,7 +197,6 @@ shellStreamableProcess handleStdout handleStderr p = do
     _ -> error "shellStreamingProcess: Created pipes were not returned"
     where
       builderToStrictBS = LBS.toStrict . BS.toLazyByteString
-      unpack = T.unpack . T.decodeUtf8
 
 -- | Like 'shellStreamableProcess' but instead of taking handlers for each
 -- stream, it automatically buffers the output of each stream and returns
@@ -195,7 +218,7 @@ shellStreamableProcessBuffered p = do
 -- | Run a shell process using the given runner function
 shellCreateProcess'
   :: MonadIO m
-  => (CreateProcess -> IO (ExitCode, String, String))
+  => (CreateProcess -> IO (ExitCode, Text, Text))
   -> CreateProcess
   -> Shell m ()
 shellCreateProcess' f p = do
@@ -203,9 +226,9 @@ shellCreateProcess' f p = do
   tellOutput (out, err)
   case ex of
     ExitFailure c -> do
-      liftIO $ putStrLn $ mconcat
+      liftIO $ T.putStrLn $ mconcat
         [ "Command failed: "
-        , showCommand p
+        , T.pack $ showCommand p
         , "\n"
         , err
         ]
@@ -224,12 +247,25 @@ shellCreateProcessWithEnv envOverrides = shellCreateProcess' f
       envWithOverrides <- liftIO $ if Map.null envOverrides
         then return $ env cmd
         else Just . Map.toList . Map.union envOverrides . Map.fromList <$> getEnvironment
-      readCreateProcessWithExitCode (cmd { env = envWithOverrides}) ""
+      withCreateProcess (cmd { env = envWithOverrides, std_out = CreatePipe, std_err = CreatePipe }) $ \_ mouth merrh ph -> case (mouth, merrh) of
+        (Just outh, Just errh) -> do
+          out <- fmap T.decodeUtf8 $ BS.hGetContents outh
+          err <- fmap T.decodeUtf8 $ BS.hGetContents errh
+          withForkWait (evaluate $ rnf out) $ \waitOut ->
+            withForkWait (evaluate $ rnf err) $ \waitErr -> do
+              waitOut
+              waitErr
+              hClose outh
+              hClose errh
+          exitCode <- waitForProcess ph
+          return (exitCode, out, err)
+        (Nothing, _) -> error "shellCreateProcessWithEnv: Failed to get std_out handle"
+        (Just _, Nothing) -> error "shellCreateProcessWithEnv: Failed to get std_err handle"
 
-runCreateProcessWithEnv :: Map String String -> CreateProcess -> IO (ExitCode, String, String)
+runCreateProcessWithEnv :: Map String String -> CreateProcess -> IO (ExitCode, Text, Text)
 runCreateProcessWithEnv menv p = execShell $ shellCreateProcessWithEnv menv p
 
-runCreateProcess :: CreateProcess -> IO (ExitCode, String, String)
+runCreateProcess :: CreateProcess -> IO (ExitCode, Text, Text)
 runCreateProcess = runCreateProcessWithEnv mempty
 
 -- | Run a shell process with stdout directed to the provided handle
@@ -249,19 +285,20 @@ shellCreateProcessWithStdOut hndl cp = do
         hClose hndl
         return (ec, "", err)
       _ -> error "shellCreateProcessWithStdOut: Failed to get std_err handle"
-    waitReadHandle :: Handle -> IO String
+    waitReadHandle :: Handle -> IO Text
     waitReadHandle h = do
-      c <- hGetContents h
+      c <- fmap T.decodeUtf8 $ BS.hGetContents h
       withForkWait (evaluate $ rnf c) $ \wait -> wait >> hClose h
       return c
-    -- The code below is taken from System.Process which unfortunately does not export this function
-    withForkWait :: IO () -> (IO () ->  IO a) -> IO a
-    withForkWait async body = do
-      waitVar <- newEmptyMVar :: IO (MVar (Either SomeException ()))
-      mask $ \restore -> do
-        tid <- forkIO $ try (restore async) >>= putMVar waitVar
-        let wait = takeMVar waitVar >>= either throwIO return
-        restore (body wait) `onException` killThread tid
+
+-- The code below is taken from System.Process which unfortunately does not export this function
+withForkWait :: IO () -> (IO () ->  IO a) -> IO a
+withForkWait async body = do
+  waitVar <- newEmptyMVar :: IO (MVar (Either SomeException ()))
+  mask $ \restore -> do
+    tid <- forkIO $ try (restore async) >>= putMVar waitVar
+    let wait = takeMVar waitVar >>= either throwIO return
+    restore (body wait) `onException` killThread tid
 
 -- | Run a shell command with access to a temporary directory
 inTempDirectory
@@ -284,4 +321,4 @@ logCommand = putStrLn . showCommand
 showCommand :: CreateProcess -> String
 showCommand p = case cmdspec p of
   ShellCommand str -> str
-  RawCommand exe args -> mconcat $ intersperse " " $ exe : args
+  RawCommand exe args -> mconcat $ L.intersperse " " $ exe : args
