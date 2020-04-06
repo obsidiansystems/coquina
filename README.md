@@ -9,15 +9,16 @@
 import Control.Monad
 import Coquina
 import System.Process (shell, proc)
+import Data.Text (unpack)
 
 main :: IO ()
 main = do
   (exitCode, out, err) <- execShell $ do
     (contents, ()) <- readStdout $ run $ shell "ls"
-    mapM_ (run . proc "file" . (:[])) $ take 10 $ lines contents
+    mapM_ (run . proc "file" . (:[])) $ take 10 $ lines $ unpack contents
   putStrLn $ unlines
     [ "Exit code: " ++ show exitCode
-    , "stdout: " ++ out
-    , "stderr: " ++ err
+    , "stdout: " ++ unpack out
+    , "stderr: " ++ unpack err
     ]
 ```
