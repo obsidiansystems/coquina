@@ -24,11 +24,13 @@ library
                , directory
                , exceptions
                , filepath
+               , monad-logger
                , mtl
                , process
                , stm
                , temporary
                , text
+               , transformers
   exposed-modules: Coquina
   other-modules: Coquina.Internal
   ghc-options: -Wall
