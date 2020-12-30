@@ -6,22 +6,59 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-|
+  Description:
+    A monad for running shell commands in Haskell and combining their output.
 
-module Coquina where
+Coquina provides a convenient interface for running shell commands in Haskell.
+The core functionality of Coquina is the ability to run a sequence of 'Shell'
+operations, inspect the output of each operation, combine their results (i.e.,
+their exit codes, stdout, and stderr), and stop execution if one of them fails.
+See the readme for an example.
+-}
+module Coquina
+  (
+  -- * The Shell Monad
+    MonadShell(..)
+  , tellStdout
+  , tellStderr
+  , readStdout
+  , readStderr
+  , Shell(..)
+  , runShell
+  , execShell
+  -- * Constructing Shell actions
+  , run
+  , shellCreateProcess
+  , shellCreateProcessWith
+  , shellCreateProcessWithEnv
+  , runCreateProcess
+  , runCreateProcessWithEnv
+  , shellCreateProcessWithStdOut
+  -- * Running in a temporary directory
+  , inTempDirectory
+  -- * Streamable Shell processes
+  , StreamingProcess(..)
+  , shellStreamableProcess
+  , shellStreamableProcessBuffered
+    -- * Miscellaneous
+  , logCommand
+  , showCommand
+  ) where
 
-import Coquina.Internal (withForkWait, readAndDecodeCreateProcess)
+import Coquina.Internal (readAndDecodeCreateProcess, withForkWait)
 
 import qualified Control.Concurrent.Async as Async
-import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
-import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
+import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef (newIORef, atomicModifyIORef', readIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import qualified Data.List as L
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -30,7 +67,7 @@ import qualified Data.Text as T (pack)
 import qualified Data.Text.Encoding as T (decodeUtf8)
 import qualified Data.Text.IO as T (putStrLn)
 import GHC.Generics (Generic)
-import GHC.IO.Handle (Handle, hSetBuffering, BufferMode(..), hIsOpen, hIsReadable, hClose)
+import GHC.IO.Handle (BufferMode(..), Handle, hClose, hIsOpen, hIsReadable, hSetBuffering)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.IO.Temp (withSystemTempDirectory)
@@ -184,7 +221,7 @@ shellStreamableProcess handleStdout handleStderr p = do
 shellStreamableProcessBuffered
   :: (MonadIO m, MonadMask m)
   => CreateProcess
-  -> Shell m (StreamingProcess m, IO ByteString, IO ByteString) -- ^ ('StreamProcess', stdout, stderr)
+  -> Shell m (StreamingProcess m, IO ByteString, IO ByteString) -- ^ ('StreamingProcess', stdout, stderr)
 shellStreamableProcessBuffered p = do
   stdoutBuf <- liftIO $ newIORef mempty
   stderrBuf <- liftIO $ newIORef mempty
@@ -196,12 +233,12 @@ shellStreamableProcessBuffered p = do
 
 
 -- | Run a shell process using the given runner function
-shellCreateProcess'
+shellCreateProcessWith
   :: MonadIO m
   => (CreateProcess -> IO (ExitCode, Text, Text))
   -> CreateProcess
   -> Shell m ()
-shellCreateProcess' f p = do
+shellCreateProcessWith f p = do
   (ex, out, err) <- liftIO $ f p
   tellOutput (out, err)
   case ex of
@@ -221,7 +258,7 @@ shellCreateProcessWithEnv
   => Map String String
   -> CreateProcess
   -> Shell m ()
-shellCreateProcessWithEnv envOverrides = shellCreateProcess' f
+shellCreateProcessWithEnv envOverrides = shellCreateProcessWith f
   where
     f cmd = do
       envWithOverrides <- liftIO $ if Map.null envOverrides
@@ -229,9 +266,11 @@ shellCreateProcessWithEnv envOverrides = shellCreateProcess' f
         else Just . Map.toList . Map.union envOverrides . Map.fromList <$> getEnvironment
       readAndDecodeCreateProcess $ cmd { env = envWithOverrides }
 
+-- | Execute a shell process with environment variables
 runCreateProcessWithEnv :: Map String String -> CreateProcess -> IO (ExitCode, Text, Text)
 runCreateProcessWithEnv menv p = execShell $ shellCreateProcessWithEnv menv p
 
+-- | Execute a shell process
 runCreateProcess :: CreateProcess -> IO (ExitCode, Text, Text)
 runCreateProcess = runCreateProcessWithEnv mempty
 
@@ -243,7 +282,7 @@ shellCreateProcessWithStdOut
   -> Shell m ()
 shellCreateProcessWithStdOut hndl cp = do
   let cp' = cp { std_out = UseHandle hndl, std_err = CreatePipe }
-  shellCreateProcess' f cp'
+  shellCreateProcessWith f cp'
   where
     f cmd = withCreateProcess cmd $ \_ _ merr p -> case merr of
       Just errh -> do

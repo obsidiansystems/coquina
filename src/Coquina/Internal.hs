@@ -10,7 +10,7 @@ import System.Process
 import System.Exit
 import System.IO (hClose)
 
--- The code below is taken from System.Process which unfortunately does not export this function
+-- | The code below is taken from System.Process which unfortunately does not export this function
 withForkWait :: IO () -> (IO () ->  IO a) -> IO a
 withForkWait async body = do
   waitVar <- newEmptyMVar :: IO (MVar (Either SomeException ()))
@@ -19,7 +19,7 @@ withForkWait async body = do
     let wait = takeMVar waitVar >>= either throwIO return
     restore (body wait) `onException` killThread tid
 
--- Like readCreateProcess, but ignores stdin and decodes bytes, assuming utf-8
+-- | Like readCreateProcess, but ignores stdin and decodes bytes, assuming utf-8
 readAndDecodeCreateProcess :: CreateProcess -> IO (ExitCode, Text, Text)
 readAndDecodeCreateProcess cp =
   withCreateProcess (cp { std_out = CreatePipe, std_err = CreatePipe }) $ \_ mouth merrh ph -> case (mouth, merrh) of
