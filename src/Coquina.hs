@@ -28,6 +28,7 @@ module Coquina
   , Shell(..)
   , runShell
   , execShell
+  , hoistShell
   -- * Constructing Shell actions
   , run
   , shellCreateProcess
@@ -56,7 +57,6 @@ import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.Monad.Except (MonadError, ExceptT, throwError, runExceptT)
 import Control.Monad.Logger (MonadLogger)
 import Control.Monad.Trans.Except (mapExceptT)
-import Control.Monad.Writer (mapWriterT)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
