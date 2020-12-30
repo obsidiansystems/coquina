@@ -61,7 +61,7 @@ readStderr f = do
   ((_, err), a) <- readOutput f
   return (err, a)
 
--- | An action that supports running commands, reading their output, and emmitting output
+-- | An action that supports running commands, reading their output, and emitting output
 newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (Text, Text) m) a }
   deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask)
 
