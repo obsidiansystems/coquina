@@ -53,6 +53,7 @@ import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
+import Control.Monad.Fail
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -100,7 +101,7 @@ readStderr f = do
 
 -- | An action that supports running commands, reading their output, and emitting output
 newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (Text, Text) m) a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask, MonadFail)
 
 instance MonadTrans Shell where
   lift = Shell . lift . lift
