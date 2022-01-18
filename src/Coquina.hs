@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -53,6 +54,8 @@ import Coquina.Internal (readAndDecodeCreateProcess, withForkWait)
 import qualified Control.Concurrent.Async as Async
 import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
+import Control.Monad.Trans.Control
+import Control.Monad.Base
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
 import Control.Monad.Logger (MonadLogger)
@@ -136,6 +139,9 @@ instance MonadWriter w m => MonadWriter w (Shell m) where
     case e of
       Left ec -> throwError ec
       Right v -> return v
+
+deriving instance MonadBase b m => MonadBase b (Shell m)
+deriving instance MonadBaseControl b m => MonadBaseControl b (Shell m)
 
 -- | Run a shell action, producing stdout, stderr, and a result.
 runShell :: Monad m => Shell m a -> m (Text, Text, Either Int a)
