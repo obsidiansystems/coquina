@@ -1,5 +1,9 @@
 # Revision history for coquina
 
+## 0.1.0.1
+
+* Loosen version bounds
+
 ## 0.1.0.0
 
 * First version. A few simple functions for running shell commands and

@@ -1,3 +1,6 @@
+# MOVED TO [GITHUB](https://github.com/obsidiansystems/coquina)
+
+
 # coquina
 [![Haskell](https://img.shields.io/badge/language-Haskell-orange.svg)](https://haskell.org) [![Hackage](https://img.shields.io/hackage/v/coquina.svg)](https://hackage.haskell.org/package/coquina) [![Hackage CI](https://matrix.hackage.haskell.org/api/v2/packages/coquina/badge)](https://matrix.hackage.haskell.org/#/package/coquina) [![Github CI](https://github.com/obsidiansystems/coquina/workflows/github-action/badge.svg)](https://github.com/obsidiansystems/coquina/actions) [![BSD3 License](https://img.shields.io/badge/license-BSD3-blue.svg)](https://github.com/obsidiansystems/coquina/blob/master/LICENSE)
 
