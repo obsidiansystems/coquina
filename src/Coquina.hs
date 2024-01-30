@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-|
@@ -27,6 +28,7 @@ module Coquina
   , Shell(..)
   , runShell
   , execShell
+  , hoistShell
   -- * Constructing Shell actions
   , run
   , shellCreateProcess
@@ -53,7 +55,8 @@ import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
-import Control.Monad.Fail
+import Control.Monad.Logger (MonadLogger)
+import Control.Monad.Trans.Except (mapExceptT)
 import Control.Monad.Writer
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -73,6 +76,8 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process
+
+instance MonadLogger m => MonadLogger (Shell m) where
 
 -- | A class that supports reading and writing stdout and stderr
 class Monad m => MonadShell m where
@@ -144,6 +149,10 @@ execShell s = do
   case r of
     Left ec -> return (ExitFailure ec, out, err)
     Right _ -> return (ExitSuccess, out, err)
+
+-- | Hoist a shell action into another monad
+hoistShell :: (forall x. m x -> n x) -> Shell m a -> Shell n a
+hoistShell f s = Shell $ mapExceptT (mapWriterT f) $ unShell s
 
 -- | Run a 'CreateProcess' in a 'Shell'
 shellCreateProcess :: MonadIO m => CreateProcess -> Shell m ()
