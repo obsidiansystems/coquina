@@ -53,8 +53,10 @@ import Coquina.Internal (readAndDecodeCreateProcess, withForkWait)
 import qualified Control.Concurrent.Async as Async
 import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
+import Control.Monad
 import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow, finally)
 import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
+import Control.Monad.Fix
 import Control.Monad.Logger (MonadLogger)
 import Control.Monad.Trans.Except (mapExceptT)
 import Control.Monad.Writer
