@@ -106,7 +106,7 @@ readStderr f = do
 
 -- | An action that supports running commands, reading their output, and emitting output
 newtype Shell m a = Shell { unShell :: ExceptT Int (WriterT (Text, Text) m) a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask, MonadFail)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadError Int, MonadThrow, MonadCatch, MonadMask)
 
 instance MonadTrans Shell where
   lift = Shell . lift . lift
