@@ -11,6 +11,11 @@ let
       ver = "1.4.0.2";
       sha256 = "04kg2qdnsqzzmj3xggy2jcgidlp21lsjkz4sfnbq7b1yhrv2vbbc";
     } {}));
+    hedgehog = pkgs.haskell.lib.doJailbreak (self.callHackageDirect {
+      pkg = "hedgehog";
+      ver = "1.4";
+      sha256 = "1qxxhs720im0wpa5lsca0l8qsfmhbyphd1aq01nv96v29lgv795b";
+    } {});
   };
   targets = ["ghc8107" "ghc981"];
 
