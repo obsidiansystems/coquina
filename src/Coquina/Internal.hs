@@ -21,15 +21,15 @@ readAndDecodeCreateProcess :: CreateProcess -> Text -> IO (ExitCode, Text, Text)
 readAndDecodeCreateProcess cp input =
   withCreateProcess (cp { std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }) $ \mstdin mouth merrh ph -> case (mstdin, mouth, merrh) of
     (Just inh, Just outh, Just errh) -> do
+      -- Write stdin
+      unless (T.null input) $ do
+        ignoreSigPipe $ T.hPutStr inh input
+      -- hClose performs implicit hFlush, and thus may trigger a SIGPIPE
+      ignoreSigPipe $ hClose inh
       out <- fmap decodeUtf8 $ hGetContents outh
       err <- fmap decodeUtf8 $ hGetContents errh
       withForkWait (evaluate $ rnf out) $ \waitOut ->
         withForkWait (evaluate $ rnf err) $ \waitErr -> do
-          -- Write stdin
-          unless (T.null input) $
-            ignoreSigPipe $ T.hPutStr inh input
-          -- hClose performs implicit hFlush, and thus may trigger a SIGPIPE
-          ignoreSigPipe $ hClose inh
           waitOut
           waitErr
           hClose outh
