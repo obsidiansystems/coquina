@@ -7,6 +7,6 @@ pkgs.mkShell {
     pkgs.ghcid
   ];
   inputsFrom = [
-    (import ./release.nix { inherit pkgs; }).ghc981.env
+    (import ./release.nix { inherit pkgs; }).ghc965.env
   ];
 }

@@ -1,6 +1,6 @@
 cabal-version:      >=1.10
 name:               coquina
-version:            0.1.0.1
+version:            0.2.0.0
 synopsis:           Yet another shell monad.
 description:        A simple monad for shelling out from Haskell programs.
 bug-reports:        https://github.com/obsidiansystems/coquina/issues
