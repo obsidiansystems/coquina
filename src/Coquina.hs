@@ -158,7 +158,7 @@ hoistShell f s = Shell $ mapExceptT (mapWriterT f) $ unShell s
 
 -- | Run a 'CreateProcess' in a 'Shell'
 shellCreateProcess :: MonadIO m => CreateProcess -> Shell m ()
-shellCreateProcess = shellCreateProcessWithEnv mempty
+shellCreateProcess p = shellCreateProcessWithEnv mempty p ""
 
 -- | Run a 'CreateProcess' in a 'Shell'
 run :: MonadIO m => CreateProcess -> Shell m ()
@@ -269,18 +269,19 @@ shellCreateProcessWithEnv
   :: MonadIO m
   => Map String String
   -> CreateProcess
+  -> Text -- ^ stdin
   -> Shell m ()
-shellCreateProcessWithEnv envOverrides = shellCreateProcessWith f
+shellCreateProcessWithEnv envOverrides cmd' stdin = shellCreateProcessWith f cmd'
   where
     f cmd = do
       envWithOverrides <- liftIO $ if Map.null envOverrides
         then return $ env cmd
         else Just . Map.toList . Map.union envOverrides . Map.fromList <$> getEnvironment
-      readAndDecodeCreateProcess $ cmd { env = envWithOverrides }
+      readAndDecodeCreateProcess (cmd { env = envWithOverrides }) stdin
 
 -- | Execute a shell process with environment variables
 runCreateProcessWithEnv :: Map String String -> CreateProcess -> IO (ExitCode, Text, Text)
-runCreateProcessWithEnv menv p = execShell $ shellCreateProcessWithEnv menv p
+runCreateProcessWithEnv menv p = execShell $ shellCreateProcessWithEnv menv p ""
 
 -- | Execute a shell process
 runCreateProcess :: CreateProcess -> IO (ExitCode, Text, Text)

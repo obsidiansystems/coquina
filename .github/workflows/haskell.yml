@@ -1,13 +1,13 @@
 name: github-action
 
-on: [push, pull_request] 
+on: [push, pull_request]
 
 jobs:
   build:
     strategy:
       matrix:
-        ghc: ['8.6.5', '8.10.7', '9.8.1']
-        os: ['ubuntu-latest', 'macos-latest']
+        ghc: ['8.10.7', '9.6.5']
+        os: ['ubuntu-latest']
     runs-on: ${{ matrix.os }}
 
     name: GHC ${{ matrix.ghc }} on ${{ matrix.os }}
